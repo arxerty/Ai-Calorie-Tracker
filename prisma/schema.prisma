@@ -1,0 +1,95 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String        @id // Telegram User ID
+  streakDays   Int           @default(0)
+  fitnessGoal  String        @default("maintenance") // weight_loss, maintenance, muscle_gain
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  settings     UserSettings?
+  dailyLogs    DailyLog[]
+  analyses     AIAnalysis[]
+  photos       MealPhoto[]
+}
+
+model UserSettings {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredAiProvider String   @default("gemini") // gemini, openai
+  darkMode            Boolean  @default(true)
+  calorieTarget       Int      @default(2000)
+  proteinTarget       Int      @default(130)
+  fatTarget           Int      @default(70)
+  carbTarget          Int      @default(210)
+  
+  isOnboarded         Boolean  @default(false)
+  weight              Float?
+  height              Float?
+  age                 Int?
+  gender              String?
+}
+
+model DailyLog {
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      String     // YYYY-MM-DD format
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  foodItems FoodItem[]
+
+  @@unique([userId, date])
+  @@index([userId])
+}
+
+model FoodItem {
+  id         String     @id @default(uuid())
+  dailyLogId String
+  dailyLog   DailyLog   @relation(fields: [dailyLogId], references: [id], onDelete: Cascade)
+  name       String
+  weightG    Float
+  calories   Float
+  proteinG   Float
+  fatG       Float
+  carbsG     Float
+  createdAt  DateTime   @default(now())
+  
+  photo      MealPhoto?
+}
+
+model AIAnalysis {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prompt      String
+  responseRaw String
+  confidence  Float
+  success     Boolean
+  errorLog    String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model MealPhoto {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url         String    // CDN / local upload public URL
+  storagePath String?   // Local filesystem path or Cloud storage key
+  createdAt   DateTime  @default(now())
+  
+  foodItemId  String?   @unique
+  foodItem    FoodItem? @relation(fields: [foodItemId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
