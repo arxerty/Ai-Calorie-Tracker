@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/server/prisma';
 import { verifyTelegramAuth } from '@/lib/server/telegram-auth';
+import { calculateTargets } from '@/lib/nutrition';
 import { z } from 'zod';
 
 const SettingsUpdateSchema = z.object({
@@ -10,14 +11,15 @@ const SettingsUpdateSchema = z.object({
   proteinTarget: z.number().int().positive().optional(),
   fatTarget: z.number().int().positive().optional(),
   carbTarget: z.number().int().positive().optional(),
+  waterTarget: z.number().int().min(500).max(10000).optional(),
   fitnessGoal: z.string().optional(),
-  
-  // Physical parameters for BMR/TDEE calculations
+
+  // Physical parameters for BMR/TDEE calculations (null = not provided)
   isOnboarded: z.boolean().optional(),
-  weight: z.number().positive().optional(),
-  height: z.number().positive().optional(),
-  age: z.number().int().positive().optional(),
-  gender: z.enum(['male', 'female']).optional(),
+  weight: z.number().positive().nullish(),
+  height: z.number().positive().nullish(),
+  age: z.number().int().positive().nullish(),
+  gender: z.enum(['male', 'female']).nullish(),
 });
 
 export async function PUT(request: Request) {
@@ -53,40 +55,20 @@ export async function PUT(request: Request) {
     const finalGoal = fitnessGoal ?? current.user.fitnessGoal;
 
     // 2. Perform Onboarding Calculations if physical parameters exist (Mifflin-St Jeor)
-    if (finalWeight && finalHeight && finalAge && finalGender) {
-      let bmr = 0;
-      if (finalGender === 'male') {
-        bmr = 10 * finalWeight + 6.25 * finalHeight - 5 * finalAge + 5;
-      } else {
-        bmr = 10 * finalWeight + 6.25 * finalHeight - 5 * finalAge - 161;
-      }
+    const calculated = calculateTargets({
+      weight: finalWeight,
+      height: finalHeight,
+      age: finalAge,
+      gender: finalGender,
+      goal: finalGoal,
+    });
 
-      // Moderate activity index
-      const tdee = bmr * 1.375;
-
-      let calorieTarget = Math.round(tdee);
-      const minCals = finalGender === 'male' ? 1500 : 1200;
-
-      if (finalGoal === 'weight_loss') {
-        calorieTarget = Math.max(minCals, Math.round(tdee - 500));
-      } else if (finalGoal === 'muscle_gain') {
-        calorieTarget = Math.round(tdee + 300);
-      }
-
-      // Macro distributions:
-      // Protein: 2.0g per kg of bodyweight for weight loss/muscle gain, 1.6g for maintenance
-      const proteinTarget = Math.round((finalGoal === 'maintenance' ? 1.6 : 2.0) * finalWeight);
-      // Fat: 0.9g per kg of bodyweight
-      const fatTarget = Math.round(0.9 * finalWeight);
-      // Carbs: Remaining calories allocated to carbs (4 kcal/g)
-      const remainingCals = calorieTarget - (proteinTarget * 4) - (fatTarget * 9);
-      const carbTarget = Math.max(50, Math.round(remainingCals / 4));
-
-      // Merge Mifflin-calculated targets into final settings payload if not explicitly overridden
-      if (settingsData.calorieTarget === undefined) settingsData.calorieTarget = calorieTarget;
-      if (settingsData.proteinTarget === undefined) settingsData.proteinTarget = proteinTarget;
-      if (settingsData.fatTarget === undefined) settingsData.fatTarget = fatTarget;
-      if (settingsData.carbTarget === undefined) settingsData.carbTarget = carbTarget;
+    // Merge calculated targets into final settings payload if not explicitly overridden
+    if (calculated) {
+      if (settingsData.calorieTarget === undefined) settingsData.calorieTarget = calculated.calories;
+      if (settingsData.proteinTarget === undefined) settingsData.proteinTarget = calculated.protein;
+      if (settingsData.fatTarget === undefined) settingsData.fatTarget = calculated.fat;
+      if (settingsData.carbTarget === undefined) settingsData.carbTarget = calculated.carbs;
     }
 
     // 3. Update database settings

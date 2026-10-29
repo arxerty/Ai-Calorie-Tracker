@@ -13,7 +13,11 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false, // Prevents zoom-on-focus on mobile browsers for a native app feel
+  viewportFit: 'cover', // lets the layout use env(safe-area-inset-*) on notched iPhones
 };
+
+// Applies the saved/system theme before first paint to avoid a light→dark flash
+const themeBootScript = `(function(){try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.classList.toggle('dark',t==='dark')}catch(e){}})();`;
 
 export default function RootLayout({
   children,
@@ -21,13 +25,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ru" className="dark">
+    <html lang="ru" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         {/* Load Telegram WebApp Script */}
         {/* eslint-disable-next-line @next/next/no-sync-scripts */}
         <script src="https://telegram.org/js/telegram-web-app.js" />
       </head>
-      <body className="antialiased bg-black text-white">
+      <body className="antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>

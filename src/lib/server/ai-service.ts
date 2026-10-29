@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import { z } from 'zod';
+import { COACH_SYSTEM_PROMPT, CoachReportSchema, type CoachReport } from '@/lib/server/coach';
 
 // 1. Zod Contract for Food Ingestion Output (in Russian)
 export const FoodAnalysisSchema = z.object({
@@ -107,6 +108,70 @@ export class AIService {
       // If all AI attempts fail, execute safe parser fallback / throw descriptive error
       return this.generateFallbackData(input, errorLogs.join('; '));
     }
+  }
+
+  /**
+   * Writes a nutrition coaching report from a prepared stats prompt.
+   * Tries the preferred provider first, then the other one. Throws if none is configured or all fail,
+   * so the caller can fall back to a rule-based report.
+   */
+  async generateCoachReport(prompt: string, provider: 'gemini' | 'openai' = 'gemini'): Promise<CoachReport> {
+    const order: ('gemini' | 'openai')[] = provider === 'openai' ? ['openai', 'gemini'] : ['gemini', 'openai'];
+    const errors: string[] = [];
+
+    for (const p of order) {
+      try {
+        if (p === 'gemini' && this.geminiClient) {
+          const model = this.geminiClient.getGenerativeModel({
+            model: 'gemini-2.5-flash',
+            systemInstruction: COACH_SYSTEM_PROMPT,
+          });
+          const schema: any = {
+            type: 'object',
+            properties: {
+              headline: { type: 'string' },
+              summary: { type: 'string' },
+              wins: { type: 'array', items: { type: 'string' } },
+              improvements: { type: 'array', items: { type: 'string' } },
+              next_steps: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['headline', 'summary', 'wins', 'improvements', 'next_steps'],
+          };
+          const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.4 },
+          });
+          return this.parseCoachJSON(result.response.text());
+        }
+
+        if (p === 'openai' && this.openaiClient) {
+          const response = await this.openaiClient.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: COACH_SYSTEM_PROMPT },
+              { role: 'user', content: prompt },
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0.4,
+          });
+          return this.parseCoachJSON(response.choices[0]?.message?.content || '{}');
+        }
+      } catch (error: any) {
+        console.error(`🔴 Error running ${p} coach report:`, error);
+        errors.push(error.message || String(error));
+      }
+    }
+
+    throw new Error(errors.length > 0 ? errors.join('; ') : 'No AI provider configured');
+  }
+
+  private parseCoachJSON(rawText: string): CoachReport {
+    let cleaned = rawText.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+    }
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    return CoachReportSchema.parse(JSON.parse(match ? match[0] : cleaned));
   }
 
   /**
@@ -324,6 +389,7 @@ export class AIService {
     switch (mimeType) {
       case 'audio/ogg': return 'ogg';
       case 'audio/webm': return 'webm';
+      case 'audio/mp4': return 'm4a';
       case 'audio/mp3':
       case 'audio/mpeg': return 'mp3';
       case 'audio/wav': return 'wav';
