@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 interface TelegramUser {
   id: number;
@@ -11,12 +11,14 @@ interface TelegramUser {
   is_premium?: boolean;
 }
 
+type Theme = 'light' | 'dark';
+
 interface TmaContextType {
   user: TelegramUser | null;
   initDataRaw: string;
   isTelegram: boolean;
-  theme: 'light' | 'dark';
-  setTheme: (t: 'light' | 'dark') => void;
+  theme: Theme;
+  setTheme: (t: Theme) => void;
   hapticImpact: (style: 'light' | 'medium' | 'heavy') => void;
   hapticNotification: (type: 'success' | 'warning' | 'error') => void;
   hapticSelectionChange: () => void;
@@ -27,7 +29,7 @@ const TmaContext = createContext<TmaContextType>({
   user: null,
   initDataRaw: '',
   isTelegram: false,
-  theme: 'dark',
+  theme: 'light',
   setTheme: () => {},
   hapticImpact: () => {},
   hapticNotification: () => {},
@@ -37,162 +39,136 @@ const TmaContext = createContext<TmaContextType>({
 
 export const useTma = () => useContext(TmaContext);
 
+// Matches --background in globals.css so the Telegram header blends with the app
+const BG_COLOR: Record<Theme, string> = { light: '#f2f2f7', dark: '#000000' };
+
+const getWebApp = () => (typeof window === 'undefined' ? undefined : (window as any).Telegram?.WebApp);
+
+function generateDevInitData() {
+  const devUser = {
+    id: 99999999,
+    first_name: 'Иван',
+    last_name: 'Тестов',
+    username: 'dev_nutrition_user',
+    language_code: 'ru',
+  };
+
+  const params = new URLSearchParams();
+  params.append('user', JSON.stringify(devUser));
+  params.append('auth_date', Math.floor(Date.now() / 1000).toString());
+  params.append('hash', 'mock_dev_hash');
+
+  return { raw: params.toString(), user: devUser };
+}
+
 export function TmaProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<TelegramUser | null>(null);
   const [initDataRaw, setInitDataRaw] = useState<string>('');
   const [isTelegram, setIsTelegram] = useState(false);
-  const [theme, setThemeState] = useState<'light' | 'dark'>('dark');
+  const [theme, setThemeState] = useState<Theme>('light');
 
-  // Load theme from localStorage or system setting
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const cached = localStorage.getItem('theme') as 'light' | 'dark' | null;
-    if (cached) {
-      setTheme(cached);
-    } else {
-      setTheme('dark');
-    }
-  }, []);
-
-  const setTheme = (t: 'light' | 'dark') => {
-    if (typeof window === 'undefined') return;
-    
-    setThemeState(t);
-    localStorage.setItem('theme', t);
-
-    // Apply class to html
-    const html = document.documentElement;
-    if (t === 'light') {
-      html.classList.add('light');
-      html.classList.remove('dark');
-    } else {
-      html.classList.add('dark');
-      html.classList.remove('light');
-    }
-
-    // Sync statusbar / headers if running in Telegram
-    const webapp = (window as any).Telegram?.WebApp;
+  const applyTheme = useCallback((t: Theme) => {
+    document.documentElement.classList.toggle('dark', t === 'dark');
+    const webapp = getWebApp();
     if (webapp) {
-      const color = t === 'light' ? '#FFFFFF' : '#000000';
       try {
-        webapp.setHeaderColor(color);
-        webapp.setBackgroundColor(color);
+        webapp.setHeaderColor(BG_COLOR[t]);
+        webapp.setBackgroundColor(BG_COLOR[t]);
+        webapp.setBottomBarColor?.(BG_COLOR[t]);
       } catch (e) {
         console.error('Failed to sync Telegram theme colors', e);
       }
     }
-  };
+  }, []);
 
+  const setTheme = useCallback(
+    (t: Theme) => {
+      setThemeState(t);
+      applyTheme(t);
+      try {
+        localStorage.setItem('theme', t);
+      } catch {
+        // storage can be unavailable in some webviews: the theme just won't persist
+      }
+    },
+    [applyTheme]
+  );
+
+  // Initial theme: saved choice → Telegram → system preference
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    let initial: Theme | null = null;
+    try {
+      const cached = localStorage.getItem('theme');
+      if (cached === 'light' || cached === 'dark') initial = cached;
+    } catch {
+      // ignore
+    }
+    if (!initial) {
+      const tgScheme = getWebApp()?.colorScheme;
+      if (tgScheme === 'light' || tgScheme === 'dark') initial = tgScheme;
+    }
+    if (!initial) {
+      initial = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    setThemeState(initial);
+    applyTheme(initial);
+  }, [applyTheme]);
 
-    const webapp = (window as any).Telegram?.WebApp;
+  // Telegram / dev session: runs once
+  useEffect(() => {
+    const webapp = getWebApp();
 
     if (webapp) {
       setIsTelegram(true);
       webapp.ready();
       webapp.expand();
-      
-      // Platform restrictions
+
       if ('isVerticalSwipesEnabled' in webapp) {
         webapp.isVerticalSwipesEnabled = false;
       }
-      
-      // Match current theme state
-      const color = theme === 'light' ? '#FFFFFF' : '#000000';
-      webapp.setHeaderColor(color);
-      webapp.setBackgroundColor(color);
 
-      // Extract initData
       if (webapp.initData) {
         setInitDataRaw(webapp.initData);
-        if (webapp.initDataUnsafe?.user) {
-          setUser(webapp.initDataUnsafe.user);
-        }
-      } else {
-        const mockInitData = generateDevInitData();
-        setInitDataRaw(mockInitData.raw);
-        setUser(mockInitData.user);
+        if (webapp.initDataUnsafe?.user) setUser(webapp.initDataUnsafe.user);
+        return;
       }
-    } else {
-      const mockInitData = generateDevInitData();
-      setInitDataRaw(mockInitData.raw);
-      setUser(mockInitData.user);
     }
-  }, [theme]);
 
-  const generateDevInitData = () => {
-    const devUser = {
-      id: 99999999,
-      first_name: 'Иван',
-      last_name: 'Тестов',
-      username: 'dev_nutrition_user',
-      language_code: 'ru'
-    };
-    
-    const userJson = JSON.stringify(devUser);
-    const params = new URLSearchParams();
-    params.append('user', userJson);
-    params.append('auth_date', Math.floor(Date.now() / 1000).toString());
-    params.append('hash', 'mock_dev_hash');
-    
-    return {
-      raw: params.toString(),
-      user: devUser
-    };
-  };
+    const mock = generateDevInitData();
+    setInitDataRaw(mock.raw);
+    setUser(mock.user);
+  }, []);
 
-  const hapticImpact = (style: 'light' | 'medium' | 'heavy') => {
-    const webapp = (window as any).Telegram?.WebApp;
-    if (webapp?.HapticFeedback) {
-      webapp.HapticFeedback.impactOccurred(style);
-    } else {
-      console.log(`📳 [Haptic Mock] Impact: ${style}`);
-    }
-  };
+  const hapticImpact = useCallback((style: 'light' | 'medium' | 'heavy') => {
+    getWebApp()?.HapticFeedback?.impactOccurred(style);
+  }, []);
 
-  const hapticNotification = (type: 'success' | 'warning' | 'error') => {
-    const webapp = (window as any).Telegram?.WebApp;
-    if (webapp?.HapticFeedback) {
-      webapp.HapticFeedback.notificationOccurred(type);
-    } else {
-      console.log(`📳 [Haptic Mock] Notification: ${type}`);
-    }
-  };
+  const hapticNotification = useCallback((type: 'success' | 'warning' | 'error') => {
+    getWebApp()?.HapticFeedback?.notificationOccurred(type);
+  }, []);
 
-  const hapticSelectionChange = () => {
-    const webapp = (window as any).Telegram?.WebApp;
-    if (webapp?.HapticFeedback) {
-      webapp.HapticFeedback.selectionChanged();
-    } else {
-      console.log('📳 [Haptic Mock] Selection Changed');
-    }
-  };
+  const hapticSelectionChange = useCallback(() => {
+    getWebApp()?.HapticFeedback?.selectionChanged();
+  }, []);
 
-  const closeApp = () => {
-    const webapp = (window as any).Telegram?.WebApp;
-    if (webapp) {
-      webapp.close();
-    } else {
-      console.log('[TMA-SDK] Close App Triggered');
-    }
-  };
+  const closeApp = useCallback(() => {
+    getWebApp()?.close();
+  }, []);
 
-  return (
-    <TmaContext.Provider
-      value={{
-        user,
-        initDataRaw,
-        isTelegram,
-        theme,
-        setTheme,
-        hapticImpact,
-        hapticNotification,
-        hapticSelectionChange,
-        closeApp,
-      }}
-    >
-      {children}
-    </TmaContext.Provider>
+  const value = useMemo(
+    () => ({
+      user,
+      initDataRaw,
+      isTelegram,
+      theme,
+      setTheme,
+      hapticImpact,
+      hapticNotification,
+      hapticSelectionChange,
+      closeApp,
+    }),
+    [user, initDataRaw, isTelegram, theme, setTheme, hapticImpact, hapticNotification, hapticSelectionChange, closeApp]
   );
+
+  return <TmaContext.Provider value={value}>{children}</TmaContext.Provider>;
 }

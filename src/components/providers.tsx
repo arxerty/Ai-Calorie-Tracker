@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TmaProvider } from './tma-provider';
+import { ToastProvider } from './ui/Toast';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // Prevent sharing query client instance across requests in SSR
@@ -21,7 +22,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TmaProvider>{children}</TmaProvider>
+      <TmaProvider>
+        <ToastProvider>{children}</ToastProvider>
+      </TmaProvider>
     </QueryClientProvider>
   );
 }

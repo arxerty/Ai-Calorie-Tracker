@@ -18,6 +18,9 @@ model User {
   dailyLogs    DailyLog[]
   analyses     AIAnalysis[]
   photos       MealPhoto[]
+  weightEntries WeightEntry[]
+  waterLogs    WaterLog[]
+  favorites    FavoriteFood[]
 }
 
 model UserSettings {
@@ -30,7 +33,8 @@ model UserSettings {
   proteinTarget       Int      @default(130)
   fatTarget           Int      @default(70)
   carbTarget          Int      @default(210)
-  
+  waterTarget         Int      @default(2000) // ml per day
+
   isOnboarded         Boolean  @default(false)
   weight              Float?
   height              Float?
@@ -61,9 +65,50 @@ model FoodItem {
   proteinG   Float
   fatG       Float
   carbsG     Float
+  mealType   String?    // breakfast, lunch, dinner, snack. Null for legacy rows: derived from createdAt on the client
   createdAt  DateTime   @default(now())
-  
+
   photo      MealPhoto?
+}
+
+model WeightEntry {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      String   // YYYY-MM-DD format, one entry per day
+  weightKg  Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId])
+}
+
+model WaterLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      String   // YYYY-MM-DD format
+  ml        Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId])
+}
+
+model FavoriteFood {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  weightG   Float
+  calories  Float
+  proteinG  Float
+  fatG      Float
+  carbsG    Float
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model AIAnalysis {

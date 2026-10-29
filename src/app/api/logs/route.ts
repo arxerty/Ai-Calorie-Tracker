@@ -11,7 +11,15 @@ const AddFoodSchema = z.object({
   proteinG: z.number().nonnegative(),
   fatG: z.number().nonnegative(),
   carbsG: z.number().nonnegative(),
+  mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
   photoId: z.string().uuid().optional(),
+});
+
+const PatchFoodSchema = z.object({
+  id: z.string().min(1),
+  mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
+  // Multiplies weight and all macros (e.g. 1.5 = one and a half portions)
+  scale: z.number().min(0.1).max(10).optional(),
 });
 
 /**
@@ -115,6 +123,7 @@ export async function POST(request: Request) {
         proteinG: data.proteinG,
         fatG: data.fatG,
         carbsG: data.carbsG,
+        mealType: data.mealType,
       },
     });
 
@@ -172,6 +181,58 @@ export async function POST(request: Request) {
       { success: false, error: error.message || 'Internal server error' },
       { status: error.message?.includes('signature') ? 401 : 500 }
     );
+  }
+}
+
+/**
+ * PATCH: Change the meal slot of a logged item and/or scale its portion
+ */
+export async function PATCH(request: Request) {
+  try {
+    const initDataRaw = request.headers.get('x-telegram-init-data');
+    if (!initDataRaw) {
+      return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    }
+
+    const tgUser = verifyTelegramAuth(initDataRaw);
+    const userId = String(tgUser.id);
+
+    const data = PatchFoodSchema.parse(await request.json());
+
+    const foodItem = await prisma.foodItem.findUnique({
+      where: { id: data.id },
+      include: { dailyLog: true },
+    });
+
+    if (!foodItem || foodItem.dailyLog.userId !== userId) {
+      return NextResponse.json({ success: false, error: 'Food item not found or unauthorized' }, { status: 404 });
+    }
+
+    const round1 = (n: number) => Math.round(n * 10) / 10;
+    const k = data.scale;
+
+    const updated = await prisma.foodItem.update({
+      where: { id: data.id },
+      data: {
+        ...(data.mealType ? { mealType: data.mealType } : {}),
+        ...(k
+          ? {
+              weightG: Math.round(foodItem.weightG * k),
+              calories: Math.round(foodItem.calories * k),
+              proteinG: round1(foodItem.proteinG * k),
+              fatG: round1(foodItem.fatG * k),
+              carbsG: round1(foodItem.carbsG * k),
+            }
+          : {}),
+      },
+    });
+
+    return NextResponse.json({ success: true, foodItem: updated });
+
+  } catch (error: any) {
+    console.error('🔴 [LOGS-PATCH] Error updating food:', error);
+    const status = error.name === 'ZodError' ? 400 : error.message?.includes('signature') ? 401 : 500;
+    return NextResponse.json({ success: false, error: error.message || 'Internal server error' }, { status });
   }
 }
 
